@@ -8,6 +8,7 @@ import requests
 
 from .config import SETTINGS
 from .models import TradeSignal
+from .multicat_models import GenericMarketSignal
 
 
 class TelegramAlerter:
@@ -53,16 +54,47 @@ class TelegramAlerter:
             f"Note: {signal.note}"
         )
 
-    def send(self, signal: TradeSignal) -> bool:
+    def format_generic_message(self, signal: GenericMarketSignal) -> str:
+        return (
+            "🧠 Polymarket multi-category paper watch\n"
+            f"Market: {signal.question}\n"
+            f"Category: {signal.category}\n"
+            f"Best bid: {signal.best_bid}\n"
+            f"Best ask: {signal.best_ask}\n"
+            f"Spread: {signal.spread}\n"
+            f"Midpoint: {signal.midpoint_price}\n"
+            f"Confidence: {signal.confidence:.3f}\n"
+            f"Score: {signal.score:.3f}\n"
+            f"Action: {signal.action}\n"
+            f"Why: {signal.rationale}\n"
+            f"Risk flags: {signal.risk_flags or 'none'}"
+        )
+
+    def _post(self, text: str) -> bool:
         if not self.enabled:
             return False
         url = f"https://api.telegram.org/bot{SETTINGS.telegram_bot_token}/sendMessage"
         payload = {
             "chat_id": SETTINGS.telegram_chat_id,
-            "text": self.format_message(signal),
+            "text": text,
         }
         response = requests.post(url, json=payload, timeout=15)
         response.raise_for_status()
-        self.state[signal.market_id] = signal.edge_buy_yes or 0.0
-        self._save_state()
         return True
+
+    def send(self, signal: TradeSignal) -> bool:
+        sent = self._post(self.format_message(signal))
+        if sent:
+            self.state[signal.market_id] = signal.edge_buy_yes or 0.0
+            self._save_state()
+        return sent
+
+    def send_generic(self, signal: GenericMarketSignal) -> bool:
+        previous_score = self.state.get(f"generic:{signal.market_id}")
+        if previous_score is not None and signal.score < previous_score + 0.02:
+            return False
+        sent = self._post(self.format_generic_message(signal))
+        if sent:
+            self.state[f"generic:{signal.market_id}"] = signal.score
+            self._save_state()
+        return sent
